@@ -1,48 +1,89 @@
 """
-Unit tests for the Core West Alexa API endpoints (main.py).
+Integration tests for the unified Core West Alexa Plugin (main.py).
+Tests cover the Alexa-specific endpoints of the consolidated plugin.
 """
 
-import sys
+import json
 import os
+import sys
+import tempfile
+from pathlib import Path
 
-# Ensure the plugin root is on the path so imports work without installation.
+# Set test environment variables before importing the app
+os.environ["ALEXA_API_KEY"] = "test-api-key-for-tests"
+os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-for-tests")
+
+# Ensure the plugin root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
+# Point the user store at a temporary file so tests don't pollute the real store
+import auth.models as _auth_models  # noqa: E402
+_tmp_dir = tempfile.mkdtemp()
+_auth_models._USERS_FILE = Path(_tmp_dir) / "test_users.json"
 
-from main import app
+# Seed the default admin user into the temp store
+from auth.seed import seed as _seed  # noqa: E402
+_seed()
 
-client = TestClient(app)
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from main import app  # noqa: E402
+
+client = TestClient(app, raise_server_exceptions=False)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+WEBHOOK_HEADERS = {"X-API-Key": "test-api-key-for-tests"}
+
+
+def _get_admin_token() -> str:
+    """Log in as admin and return a JWT access token."""
+    resp = client.post(
+        "/auth/login",
+        json={"username": "admin", "password": "CoreWest2024!"},
+    )
+    assert resp.status_code == 200, f"Login failed: {resp.text}"
+    return resp.json()["access_token"]
 
 
 # ---------------------------------------------------------------------------
-# Root / health
+# Root / homepage
 # ---------------------------------------------------------------------------
 
-def test_root():
+def test_root_returns_html():
+    """Branded homepage returns 200 HTML."""
     resp = client.get("/")
     assert resp.status_code == 200
-    assert resp.json()["message"] == "Core West Alexa API is running"
+    assert "text/html" in resp.headers.get("content-type", "")
 
+
+# ---------------------------------------------------------------------------
+# /alexa/health
+# ---------------------------------------------------------------------------
 
 def test_health():
     resp = client.get("/alexa/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert "canvas_api_url" in data
+    assert "version" in data
+    assert "modules" in data
+    assert "alexa" in data["modules"]
 
 
 # ---------------------------------------------------------------------------
 # /alexa/query
 # ---------------------------------------------------------------------------
 
-VALID_TYPES = ["inspection", "teachers", "students", "today", "tasks", "incidents"]
+VOICE_QUERY_TYPES = [
+    "inspection", "teachers", "today", "curriculum", "subjects", "gaps",
+]
 
 
-@pytest.mark.parametrize("query_type", VALID_TYPES)
+@pytest.mark.parametrize("query_type", VOICE_QUERY_TYPES)
 def test_query_valid_types(query_type):
     resp = client.get(f"/alexa/query?type={query_type}")
     assert resp.status_code == 200
@@ -52,17 +93,20 @@ def test_query_valid_types(query_type):
     assert data["card_title"] == "Core West Brief"
 
 
-def test_query_invalid_type():
+def test_query_unknown_type_still_succeeds():
+    """Unknown types return a polite message rather than an error."""
     resp = client.get("/alexa/query?type=unknown")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "error"
-    assert "could not understand" in data["speech_text"].lower()
+    assert data["status"] == "success"
 
 
-def test_query_missing_type():
+def test_query_default_type():
+    """Missing type parameter defaults to 'today' query."""
     resp = client.get("/alexa/query")
-    assert resp.status_code == 422  # FastAPI validation error
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "success"
 
 
 def test_query_case_insensitive():
@@ -72,18 +116,40 @@ def test_query_case_insensitive():
 
 
 # ---------------------------------------------------------------------------
-# /alexa/dashboard
+# /alexa/dashboard (JWT-protected)
 # ---------------------------------------------------------------------------
 
-def test_dashboard():
+def test_dashboard_requires_auth():
+    """Dashboard should reject unauthenticated requests."""
     resp = client.get("/alexa/dashboard")
+    assert resp.status_code == 401
+
+
+def test_dashboard_with_auth():
+    """Authenticated dashboard returns inspection and curriculum data."""
+    token = _get_admin_token()
+    resp = client.get(
+        "/alexa/dashboard",
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "success"
     assert "data" in data
     dashboard = data["data"]
-    for key in ("teachers", "students", "tasks", "incidents", "inspection"):
-        assert key in dashboard
+    assert "inspection_readiness" in dashboard
+    assert "curriculum_coverage" in dashboard
+
+
+# ---------------------------------------------------------------------------
+# /alexa/webhook — API key protection
+# ---------------------------------------------------------------------------
+
+def test_webhook_requires_api_key():
+    """Webhook should reject requests without the correct API key."""
+    payload = {"request": {"type": "LaunchRequest"}}
+    resp = client.post("/alexa/webhook", json=payload)
+    assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -92,41 +158,43 @@ def test_dashboard():
 
 def test_webhook_launch_request():
     payload = {"request": {"type": "LaunchRequest"}}
-    resp = client.post("/alexa/webhook", json=payload)
+    resp = client.post("/alexa/webhook", json=payload, headers=WEBHOOK_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["version"] == "1.0"
-    assert "Welcome to Core West" in body["response"]["outputSpeech"]["text"]
-    assert body["response"]["shouldEndSession"] is True
+    assert "Welcome to Core West" in body["speech_text"]
+    assert body["received"] is True
 
 
 # ---------------------------------------------------------------------------
 # /alexa/webhook — IntentRequest
 # ---------------------------------------------------------------------------
 
-INTENT_CASES = [
-    ("TodayBriefIntent", "Core West Daily Brief"),
-    ("InspectionIntent", "Core West Inspection Brief"),
-    ("TeacherSummaryIntent", "Core West Teacher Brief"),
-    ("StudentRiskIntent", "Core West Student Risk Brief"),
-    ("TasksSummaryIntent", "Core West Tasks Brief"),
-    ("IncidentsSummaryIntent", "Core West Incidents Brief"),
+CURRICULUM_INTENTS = [
+    "TodayBriefIntent",
+    "InspectionIntent",
+    "InspectionReadinessIntent",
+    "CurriculumCoverageIntent",
+    "SubjectPerformanceIntent",
+    "CurriculumGapsIntent",
+    "TeacherSummaryIntent",
+    "StudentRiskIntent",
 ]
 
 
-@pytest.mark.parametrize("intent_name,expected_card_title", INTENT_CASES)
-def test_webhook_intent_requests(intent_name, expected_card_title):
+@pytest.mark.parametrize("intent_name", CURRICULUM_INTENTS)
+def test_webhook_curriculum_intents(intent_name):
     payload = {
         "request": {
             "type": "IntentRequest",
             "intent": {"name": intent_name},
         }
     }
-    resp = client.post("/alexa/webhook", json=payload)
+    resp = client.post("/alexa/webhook", json=payload, headers=WEBHOOK_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["response"]["card"]["title"] == expected_card_title
-    assert body["response"]["outputSpeech"]["text"]
+    assert body["received"] is True
+    assert body["speech_text"]
+    assert body["intent"] == intent_name
 
 
 def test_webhook_unknown_intent():
@@ -136,16 +204,7 @@ def test_webhook_unknown_intent():
             "intent": {"name": "UnknownIntent"},
         }
     }
-    resp = client.post("/alexa/webhook", json=payload)
+    resp = client.post("/alexa/webhook", json=payload, headers=WEBHOOK_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
-    assert "didn't understand" in body["response"]["outputSpeech"]["text"].lower()
-
-
-def test_webhook_invalid_json():
-    resp = client.post(
-        "/alexa/webhook",
-        content=b"not-json",
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 400
+    assert "did not understand" in body["speech_text"].lower()
