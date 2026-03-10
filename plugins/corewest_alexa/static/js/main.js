@@ -199,7 +199,7 @@
 
       if (res.ok) {
         const data = await res.json();
-        const token = data.access_token || data.token;
+        const token = data.access_token;
         if (token) localStorage.setItem('cwc_jwt', token);
         window.location.href = '/dashboard';
       } else {

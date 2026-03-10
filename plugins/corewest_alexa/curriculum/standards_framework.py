@@ -424,7 +424,7 @@ _SUBJECT_STANDARDS: dict[str, list[dict[str, str]]] = {
         {
             "code": "NGSS.MS.LS1.1",
             "description": "Conduct investigations about the functioning of cells",
-            "framework": "cognia",
+            "framework": "common_core",
             "strand": "Life Science",
             "grade_level": "Grade 7",
         },
