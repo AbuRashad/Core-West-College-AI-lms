@@ -1,181 +1,235 @@
 """
-Core West Alexa API — FastAPI application entry point.
+Core West College AI LMS — Alexa Plugin
+Unified FastAPI application entry-point.
 
-Endpoints:
-  GET  /              — root / liveness probe
-  GET  /alexa/health  — detailed health check
-  GET  /alexa/query   — voice query (query param: type)
-  GET  /alexa/dashboard — JSON dashboard data
-  POST /alexa/webhook — Alexa skill webhook
+Integrates:
+- Core West College branded frontend theme (Jinja2 templates)
+- Auth routes (JWT login, registration, API-key validation)
+- Curriculum monitoring endpoints (/curriculum/*)
+- Inspection readiness endpoints (/inspection/*)
+- Alexa voice endpoints (/alexa/*)
 """
 
+from __future__ import annotations
+
 import logging
-import sys
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from config import settings
-from data_aggregator import DataAggregator
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-    stream=sys.stdout,
-)
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Auth (optional — graceful degradation if not configured)
+# ---------------------------------------------------------------------------
+try:
+    from auth.dependencies import require_authenticated, verify_api_key  # type: ignore[import-not-found]
+    from auth.routes import router as auth_router                         # type: ignore[import-not-found]
+    from auth.seed import seed as _seed_admin                             # type: ignore[import-not-found]
+    _AUTH_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _AUTH_AVAILABLE = False
+    require_authenticated = None  # type: ignore[assignment]
+    verify_api_key = None         # type: ignore[assignment]
+    auth_router = None            # type: ignore[assignment]
+    _seed_admin = None            # type: ignore[assignment]
+
+# ---------------------------------------------------------------------------
+# Curriculum & Inspection routers
+# ---------------------------------------------------------------------------
+from curriculum.routes import curriculum_router, inspection_router        # noqa: E402
+from curriculum.curriculum_monitor import CurriculumMonitor               # noqa: E402
+from curriculum.inspection_readiness import InspectionReadinessEngine     # noqa: E402
+
+_monitor = CurriculumMonitor()
+_readiness = InspectionReadinessEngine()
+
+# ---------------------------------------------------------------------------
+# Theme router (branded Jinja2 pages)
+# ---------------------------------------------------------------------------
+from theme_routes import router as theme_router                           # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Lifespan — seed default admin user on startup
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    """Seed the default admin user when the application starts."""
+    if _AUTH_AVAILABLE and _seed_admin is not None:
+        try:
+            _seed_admin()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Admin seed skipped: %s", exc)
+    yield
+
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+
 app = FastAPI(
-    title="Core West Alexa API",
+    title="Core West College — Alexa Plugin",
+    version="3.0.0",
     description=(
-        "Voice briefing API that bridges the Core West Command Center "
-        "with Amazon Alexa.  Powered by Canvas LMS data."
+        "Unified plugin for the Core West College AI LMS. "
+        "Includes JWT authentication, curriculum monitoring, "
+        "inspection readiness, branded theme, and Alexa voice integration."
     ),
-    version="1.0.0",
+    lifespan=lifespan,
 )
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
+    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-aggregator = DataAggregator()
-
-SUPPORTED_TYPES = ["inspection", "teachers", "students", "today", "tasks", "incidents"]
-
-
 # ---------------------------------------------------------------------------
-# Helpers
+# Static files (theme assets)
 # ---------------------------------------------------------------------------
 
-def _alexa_response(text: str, card_title: str = "Core West") -> dict:
-    """Build a standard Alexa response payload."""
-    return {
-        "version": "1.0",
-        "response": {
-            "outputSpeech": {"type": "PlainText", "text": text},
-            "card": {"type": "Simple", "title": card_title, "content": text},
-            "shouldEndSession": True,
-        },
-    }
-
+_STATIC_DIR = Path(__file__).parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 # ---------------------------------------------------------------------------
-# Routes
+# Routers
 # ---------------------------------------------------------------------------
 
-@app.get("/")
-def root():
-    """Liveness probe — confirms the service is running."""
-    return {"message": "Core West Alexa API is running"}
+# Auth endpoints: /auth/login, /auth/register, /auth/refresh, /auth/me, etc.
+if _AUTH_AVAILABLE and auth_router is not None:
+    app.include_router(auth_router)
+
+# Curriculum endpoints: /curriculum/*
+app.include_router(curriculum_router)
+
+# Inspection endpoints: /inspection/*
+app.include_router(inspection_router)
+
+# Theme pages: /, /about, /divisions, /login, /dashboard, etc.
+app.include_router(theme_router)
+
+# ---------------------------------------------------------------------------
+# Public endpoints
+# ---------------------------------------------------------------------------
 
 
-@app.get("/alexa/health")
-def health():
-    """Detailed health check."""
-    return {
+@app.get("/alexa/health", tags=["Alexa"])
+async def health() -> JSONResponse:
+    """Health-check — no authentication required."""
+    return JSONResponse({
         "status": "ok",
-        "canvas_api_url": settings.canvas_api_url,
-        "use_mock_data": settings.use_mock_data,
-        "debug": settings.debug,
-    }
+        "version": "3.0.0",
+        "auth_available": _AUTH_AVAILABLE,
+        "modules": ["alexa", "curriculum", "inspection", "theme"],
+    })
 
 
-@app.get("/alexa/query")
-def alexa_query(
-    query_type: str = Query(
-        ...,
-        alias="type",
-        description=(
-            "Report type. One of: "
-            + ", ".join(SUPPORTED_TYPES)
-        ),
-    ),
-):
-    """Return a voice-friendly summary for the requested *type*."""
-    query_type = query_type.strip().lower()
-    summary = aggregator.get_summary(query_type)
-    if summary is None:
-        return {
-            "speech_text": "I could not understand the requested report type.",
-            "card_title": "Core West Alexa Error",
-            "card_text": (
-                "Supported types are "
-                + ", ".join(SUPPORTED_TYPES[:-1])
-                + ", and "
-                + SUPPORTED_TYPES[-1]
-                + "."
-            ),
-            "status": "error",
-        }
-    return {
-        "speech_text": summary,
+SUPPORTED_TYPES = [
+    "inspection", "teachers", "students", "today", "tasks", "incidents",
+    "curriculum", "subjects", "gaps", "at_risk",
+]
+
+
+@app.get("/alexa/query", tags=["Alexa"])
+async def alexa_query(q: str = "", type: str = "today") -> JSONResponse:
+    """Voice query endpoint — supports curriculum and inspection query types."""
+    query_type = (q or type).strip().lower()
+
+    if query_type in ("curriculum", "subjects", "gaps", "teachers", "at_risk", "today"):
+        speech_text = _monitor.get_voice_summary(query_type)
+    elif query_type == "inspection":
+        speech_text = _readiness.get_voice_summary()
+    else:
+        speech_text = f"Query type '{query_type}' received."
+
+    return JSONResponse({
+        "speech_text": speech_text,
         "card_title": "Core West Brief",
-        "card_text": summary,
+        "card_text": speech_text,
+        "query_type": query_type,
         "status": "success",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Protected Alexa endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/alexa/dashboard", tags=["Alexa"])
+async def alexa_dashboard(
+    _user=Depends(require_authenticated) if (_AUTH_AVAILABLE and require_authenticated) else None,
+) -> JSONResponse:
+    """Dashboard summary — requires a valid JWT."""
+    summary: dict = {
+        "inspection_readiness": _readiness.calculate_overall_readiness("ofsted"),
+        "curriculum_coverage": _monitor.get_coverage_summary(),
     }
+    if _AUTH_AVAILABLE and _user:
+        summary["welcome"] = f"Welcome, {_user.username}!"
+    return JSONResponse({"status": "success", "data": summary})
 
 
-@app.get("/alexa/dashboard")
-def alexa_dashboard():
-    """Return structured JSON data for the Core West command center dashboard."""
-    try:
-        data = aggregator.get_dashboard_data()
-        return {"status": "success", "data": data}
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Dashboard data fetch failed: %s", exc)
-        raise HTTPException(status_code=502, detail="Failed to fetch dashboard data") from exc
-
-
-@app.post("/alexa/webhook")
-async def alexa_webhook(request: Request):
-    """Handle incoming Alexa skill requests."""
-    try:
-        body = await request.json()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Invalid JSON in webhook body: %s", exc)
-        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
-
-    request_type = body.get("request", {}).get("type")
-    logger.debug("Alexa webhook request_type=%s", request_type)
+@app.post("/alexa/webhook", tags=["Alexa"])
+async def alexa_webhook(
+    payload: dict,
+    _key=Depends(verify_api_key) if (_AUTH_AVAILABLE and verify_api_key) else None,
+) -> JSONResponse:
+    """Alexa webhook — handles skill intents including curriculum and inspection."""
+    request_type = payload.get("request", {}).get("type", "")
+    intent_name = payload.get("request", {}).get("intent", {}).get("name", "")
 
     if request_type == "LaunchRequest":
-        return _alexa_response(
+        speech = (
             "Welcome to Core West. You can ask for today's brief, "
-            "inspection summary, teacher summary, or student risk summary.",
-            "Core West Welcome",
+            "inspection readiness, curriculum coverage, subject performance, "
+            "curriculum gaps, or student risk summary."
         )
+        return JSONResponse({"speech_text": speech, "received": True})
 
     if request_type == "IntentRequest":
-        intent_name = body.get("request", {}).get("intent", {}).get("name")
-        logger.debug("IntentRequest intent_name=%s", intent_name)
-
         intent_map = {
-            "TodayBriefIntent": ("today", "Core West Daily Brief"),
-            "InspectionIntent": ("inspection", "Core West Inspection Brief"),
-            "TeacherSummaryIntent": ("teachers", "Core West Teacher Brief"),
-            "StudentRiskIntent": ("students", "Core West Student Risk Brief"),
-            "TasksSummaryIntent": ("tasks", "Core West Tasks Brief"),
-            "IncidentsSummaryIntent": ("incidents", "Core West Incidents Brief"),
+            "TodayBriefIntent":          ("today",      _monitor.get_voice_summary),
+            "InspectionIntent":          ("inspection", _readiness.get_voice_summary),
+            "InspectionReadinessIntent": ("inspection", _readiness.get_voice_summary),
+            "CurriculumCoverageIntent":  ("coverage",   _monitor.get_voice_summary),
+            "SubjectPerformanceIntent":  ("subjects",   _monitor.get_voice_summary),
+            "CurriculumGapsIntent":      ("gaps",       _monitor.get_voice_summary),
+            "TeacherSummaryIntent":      ("teachers",   _monitor.get_voice_summary),
+            "StudentRiskIntent":         ("at_risk",    _monitor.get_voice_summary),
         }
 
         if intent_name in intent_map:
-            query_type, card_title = intent_map[intent_name]
-            text = aggregator.get_summary(query_type)
-            return _alexa_response(text, card_title)
+            query_type, handler = intent_map[intent_name]
+            try:
+                try:
+                    speech = handler()  # type: ignore[call-arg]
+                except TypeError:
+                    speech = handler(query_type)  # type: ignore[call-arg]
+            except (AttributeError, ValueError) as exc:
+                logger.error("Voice handler error for %s: %s", intent_name, exc)
+                speech = f"I was unable to retrieve the {query_type} summary."
+            return JSONResponse({"speech_text": speech, "intent": intent_name, "received": True})
 
-    return _alexa_response(
-        "Sorry, I didn't understand that request.", "Core West Error"
-    )
+    return JSONResponse({
+        "speech_text": "Sorry, I did not understand that request.",
+        "received": True,
+        "payload": payload,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +237,4 @@ async def alexa_webhook(request: Request):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(
-        "main:app",
-        host=settings.host,
-        port=settings.port,
-        reload=settings.debug,
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)

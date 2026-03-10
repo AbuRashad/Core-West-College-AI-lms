@@ -1,41 +1,12 @@
-# Core West Alexa Plugin
+# Core West College AI LMS — Alexa Plugin
 
-A lightweight FastAPI service that bridges the **Core West Command Center**
-with **Amazon Alexa**.  It reads live data from the Canvas LMS REST API and
-exposes Alexa-friendly voice summaries, a dashboard endpoint, and a webhook
-handler for Alexa skill requests.
+A unified, self-contained FastAPI plugin for the **Core West College AI LMS** that provides:
 
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    Amazon Alexa Device                        │
-└────────────────────────┬─────────────────────────────────────┘
-                         │  HTTPS (Alexa Skill webhook)
-                         ▼
-┌──────────────────────────────────────────────────────────────┐
-│              Core West Alexa API  (FastAPI / Python)          │
-│                                                               │
-│   GET  /                  — liveness probe                    │
-│   GET  /alexa/health      — health check                      │
-│   GET  /alexa/query       — voice query by type               │
-│   GET  /alexa/dashboard   — JSON dashboard data               │
-│   POST /alexa/webhook     — Alexa skill webhook               │
-│                                                               │
-│   ┌─────────────────┐   ┌──────────────────────────────┐     │
-│   │ data_aggregator │──▶│      canvas_client.py         │     │
-│   │  (summaries)    │   │  (Canvas LMS REST API calls)  │     │
-│   └─────────────────┘   └──────────────┬───────────────┘     │
-└──────────────────────────────────────────────────────────────┘
-                                         │  REST API
-                                         ▼
-                           ┌─────────────────────────┐
-                           │   Canvas LMS (Rails)     │
-                           │   /api/v1/…              │
-                           └─────────────────────────┘
-```
+- 🔐 **JWT Authentication** — login, registration, refresh, API-key validation
+- 📚 **Curriculum Monitoring** — coverage analysis, gap detection, department roll-ups
+- 📊 **Inspection Readiness** — Ofsted EIF + Cognia weighted scoring, evidence tracking, SEF generation
+- 🎨 **Branded Frontend Theme** — Core West College responsive Jinja2 templates
+- 🗣️ **Alexa Voice Integration** — Amazon Alexa skill endpoints with curriculum-aware intents
 
 ---
 
@@ -43,151 +14,153 @@ handler for Alexa skill requests.
 
 ```
 plugins/corewest_alexa/
-├── README.md                   ← this file
-├── requirements.txt            ← Python dependencies
-├── main.py                     ← FastAPI application
-├── canvas_client.py            ← Canvas LMS API client
-├── config.py                   ← Environment-based configuration
-├── data_aggregator.py          ← Voice-friendly data summaries
-├── Dockerfile                  ← Container for the service
-├── docker-compose.yml          ← Run alongside Canvas LMS
-├── tests/
+├── __init__.py
+├── main.py                          # Unified FastAPI application entry-point
+├── requirements.txt                 # Merged Python dependencies
+├── README.md                        # This file
+├── README_THEME.md                  # Theme-specific documentation
+├── theme_routes.py                  # FastAPI router for branded theme pages
+├── conftest.py                      # pytest path configuration
+├── auth/                            # JWT authentication module
 │   ├── __init__.py
-│   ├── test_main.py            ← API endpoint tests
-│   └── test_data_aggregator.py ← Data aggregation tests
-└── alexa_skill/
-    └── interaction_model.json  ← Alexa skill interaction model
+│   ├── api_key.py                   # X-API-Key header validation (Alexa webhook)
+│   ├── blacklist.py                 # In-memory token blacklist
+│   ├── dependencies.py              # require_authenticated, require_admin
+│   ├── jwt_handler.py               # JWT creation / verification
+│   ├── login_page.html              # Standalone (non-themed) login form
+│   ├── models.py                    # User model with JSON file-based storage
+│   ├── rate_limiter.py              # 5 req/min/IP brute-force protection
+│   ├── routes.py                    # Auth API endpoints
+│   ├── schemas.py                   # Pydantic request/response models
+│   ├── seed.py                      # Default admin user seeder
+│   └── utils.py                     # bcrypt password hashing
+├── curriculum/                      # Curriculum & inspection module
+│   ├── __init__.py
+│   ├── curriculum_monitor.py        # Coverage %, gap analysis, subject health scores
+│   ├── inspection_readiness.py      # Weighted readiness score, SEF generation
+│   ├── models.py                    # Pydantic models (Subject, TeachingObservation, …)
+│   ├── performance_tracker.py       # Teacher, cohort & at-risk student tracking
+│   ├── routes.py                    # 25+ FastAPI endpoints
+│   └── standards_framework.py       # Ofsted EIF, Cognia, Danielson, National Curriculum
+├── templates/                       # Jinja2 HTML templates (Core West branded)
+│   ├── base.html                    # Base layout with nav/footer
+│   ├── index.html                   # Homepage
+│   ├── about.html                   # About Us
+│   ├── divisions.html               # Academic Divisions
+│   ├── teaching_learning.html       # Teaching & Learning
+│   ├── facilities.html              # Facilities
+│   ├── admission.html               # Admissions
+│   ├── events.html                  # Events
+│   ├── careers.html                 # Careers
+│   ├── contact.html                 # Contact
+│   ├── login.html                   # Login (POSTs to /auth/login, stores JWT)
+│   ├── dashboard.html               # AI Command Center (authenticated)
+│   ├── inspection_dashboard.html    # Inspection Readiness Dashboard
+│   └── curriculum_dashboard.html    # Curriculum Coverage Dashboard
+├── static/
+│   ├── css/
+│   │   └── style.css                # 1,000+ line component library (navy/gold)
+│   └── js/
+│       └── main.js                  # Intersection observers, nav, dashboard
+└── tests/
+    ├── __init__.py
+    ├── conftest.py                  # Plugin root sys.path setup
+    ├── test_auth.py                 # 25 auth tests (JWT, registration, login)
+    ├── test_inspection.py           # Inspection readiness & performance tests
+    └── test_standards.py            # Standards framework tests
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Install Dependencies
-
 ```bash
 cd plugins/corewest_alexa
+
+# 1. Install dependencies
 pip install -r requirements.txt
+
+# 2. Set environment variables
+export JWT_SECRET_KEY="your-very-secret-key-change-in-production"
+export ALEXA_API_KEY="your-alexa-api-key"
+
+# 3. Start the server (auto-seeds admin user on first run)
+uvicorn main:app --reload --port 8080
 ```
 
-### 2. Configure Environment Variables
+Open **http://localhost:8080** to see the Core West College branded homepage.
+
+---
+
+## Environment Variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `CANVAS_API_URL` | `http://localhost:3000` | Base URL of the Canvas LMS instance |
-| `CANVAS_API_TOKEN` | *(empty)* | Canvas API bearer token |
-| `CACHE_TTL_SECONDS` | `300` | How long to cache Canvas responses |
-| `DEBUG` | `false` | Enable debug logging and auto-reload |
-| `HOST` | `0.0.0.0` | Bind address |
-| `PORT` | `8000` | Bind port |
-| `ALLOWED_ORIGINS` | `*` | Comma-separated CORS allowed origins |
-| `USE_MOCK_DATA` | `true` | Use hardcoded mock data (no Canvas required) |
-
-Copy the example and edit as needed:
-
-```bash
-cp .env.example .env   # create your own .env file
-```
-
-### 3. Run the Service
-
-```bash
-uvicorn main:app --reload
-# or
-python main.py
-```
-
-### 4. Run with Docker
-
-```bash
-docker compose up --build
-```
+|---|---|---|
+| `JWT_SECRET_KEY` | `change-me-in-production` | Secret key for JWT signing (RS256 / HS256) |
+| `JWT_ALGORITHM` | `HS256` | JWT algorithm |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Access token lifetime |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token lifetime |
+| `ALEXA_API_KEY` | `""` | API key for Alexa webhook (`X-API-Key` header) |
+| `CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins |
+| `RATE_LIMIT_MAX_ATTEMPTS` | `5` | Max login attempts per window |
+| `RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window in seconds |
 
 ---
 
 ## API Endpoints
 
-### `GET /`
-Liveness probe.
+### Public Endpoints (no auth required)
 
-```json
-{"message": "Core West Alexa API is running"}
-```
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Homepage (HTML) |
+| `GET` | `/about` | About page (HTML) |
+| `GET` | `/divisions` | Divisions page (HTML) |
+| `GET` | `/teaching-learning` | Teaching & Learning (HTML) |
+| `GET` | `/facilities` | Facilities page (HTML) |
+| `GET` | `/admission` | Admissions page (HTML) |
+| `GET` | `/events` | Events page (HTML) |
+| `GET` | `/careers` | Careers page (HTML) |
+| `GET` | `/contact` | Contact page (HTML) |
+| `GET` | `/login` | Login page (HTML) |
+| `GET` | `/alexa/health` | Health check (JSON) |
+| `GET` | `/alexa/query` | Voice query endpoint (JSON) |
 
-### `GET /alexa/health`
-Detailed health check.
+### Auth Endpoints (`/auth/*`)
 
-```json
-{"status": "ok", "canvas_api_url": "http://localhost:3000", "use_mock_data": true, "debug": false}
-```
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/auth/login` | Login — returns JWT access + refresh tokens |
+| `POST` | `/auth/register` | Register new user |
+| `POST` | `/auth/refresh` | Refresh access token |
+| `GET` | `/auth/me` | Get current user profile |
+| `POST` | `/auth/logout` | Blacklist current token |
+| `POST` | `/auth/change-password` | Change password |
 
-### `GET /alexa/query?type=<type>`
-Returns a voice-friendly summary for the given type.
+### Protected Endpoints (JWT required)
 
-**Supported types:** `inspection`, `teachers`, `students`, `today`, `tasks`, `incidents`
-
-```bash
-curl "http://localhost:8000/alexa/query?type=today"
-```
-
-```json
-{
-  "speech_text": "Today, inspection readiness is 78 percent. There are 5 open tasks...",
-  "card_title": "Core West Brief",
-  "card_text": "...",
-  "status": "success"
-}
-```
-
-### `GET /alexa/dashboard`
-Returns structured JSON for a command center dashboard.
-
-```json
-{
-  "status": "success",
-  "data": {
-    "courses": {"total_active": 12},
-    "teachers": {"total": 24, "priority_followup": 3, "avg_quality_score": 3.1},
-    "students": {"total": 320, "high_risk": 11, "low_attendance": 18, "safeguarding_flags": 2},
-    "tasks": {"open": 5},
-    "incidents": {"unresolved": 2},
-    "inspection": {"readiness_percent": 78}
-  }
-}
-```
-
-### `POST /alexa/webhook`
-Handles Alexa skill requests.  Expects a standard Alexa request JSON body.
-
-**Supported intents:**
-- `TodayBriefIntent` — daily summary
-- `InspectionIntent` — inspection readiness
-- `TeacherSummaryIntent` — teacher metrics
-- `StudentRiskIntent` — at-risk student summary
-- `TasksSummaryIntent` — open tasks
-- `IncidentsSummaryIntent` — unresolved incidents
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/dashboard` | AI Command Center (HTML) |
+| `GET` | `/inspection-dashboard` | Inspection Readiness Dashboard (HTML) |
+| `GET` | `/curriculum-dashboard` | Curriculum Coverage Dashboard (HTML) |
+| `GET` | `/alexa/dashboard` | Dashboard summary (JSON) |
+| `POST` | `/alexa/webhook` | Alexa skill webhook (API key required) |
+| `GET` | `/curriculum/*` | 25+ curriculum monitoring endpoints |
+| `GET` | `/inspection/*` | Inspection readiness endpoints |
 
 ---
 
-## Example Alexa Queries
+## School Branding
 
-> "Alexa, ask Core West for today's brief."
-
-> "Alexa, ask Core West for the inspection summary."
-
-> "Alexa, ask Core West how many students are at risk."
-
-> "Alexa, ask Core West about open tasks."
-
----
-
-## Alexa Skill Setup
-
-1. Log in to the [Alexa Developer Console](https://developer.amazon.com/alexa/console/ask).
-2. Create a new custom skill with invocation name **"core west"**.
-3. Import `alexa_skill/interaction_model.json` as the interaction model.
-4. Set the endpoint to your deployed service URL: `https://<your-domain>/alexa/webhook`.
-5. Build and test the skill.
+| Item | Detail |
+|---|---|
+| **School** | Core West College |
+| **Chairman** | Mr. Mahmoud Gohar |
+| **Head of Schools** | Mrs. Shereen Moussad |
+| **Brand colour — Navy** | `#1a237e` |
+| **Brand colour — Gold** | `#ffd700` |
+| **Breakpoints** | 576 / 768 / 992 / 1200 px |
 
 ---
 
@@ -195,35 +168,27 @@ Handles Alexa skill requests.  Expects a standard Alexa request JSON body.
 
 ```bash
 cd plugins/corewest_alexa
-pip install -r requirements.txt
+
+# All tests
 pytest tests/ -v
+
+# Auth tests only
+pytest tests/test_auth.py -v
+
+# Curriculum / inspection tests
+pytest tests/test_inspection.py tests/test_standards.py -v
 ```
 
 ---
 
-## Graceful Degradation
+## Alexa Voice Intents
 
-When the Canvas API is unreachable (missing token, network error, etc.) the
-`canvas_client.py` falls back to static mock data so the Alexa skill
-continues to respond.  Set `USE_MOCK_DATA=true` to always use mock data
-during development.
-
----
-
-## Integration with Canvas LMS Docker Setup
-
-Add the following snippet to the root `docker-compose.yml` (or keep it as a
-standalone service using `plugins/corewest_alexa/docker-compose.yml`):
-
-```yaml
-alexa-api:
-  build:
-    context: ./plugins/corewest_alexa
-  ports:
-    - "8000:8000"
-  environment:
-    - CANVAS_API_URL=http://web:3000
-    - CANVAS_API_TOKEN=${CANVAS_API_TOKEN}
-  depends_on:
-    - web
-```
+| Intent | Query Type | Description |
+|---|---|---|
+| `TodayBriefIntent` | `today` | Daily operational brief |
+| `InspectionIntent` / `InspectionReadinessIntent` | `inspection` | Ofsted readiness score |
+| `CurriculumCoverageIntent` | `coverage` | Curriculum coverage % |
+| `SubjectPerformanceIntent` | `subjects` | Subject-by-subject performance |
+| `CurriculumGapsIntent` | `gaps` | Curriculum gaps summary |
+| `TeacherSummaryIntent` | `teachers` | Teacher performance overview |
+| `StudentRiskIntent` | `at_risk` | At-risk student summary |
