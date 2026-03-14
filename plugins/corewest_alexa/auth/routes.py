@@ -192,36 +192,12 @@ async def register(
 
 # ---------------------------------------------------------------------------
 # POST /auth/refresh
+# (Deprecated) POST /auth/refresh
 # ---------------------------------------------------------------------------
-
-
-@router.post("/refresh", response_model=LoginResponse)
-async def refresh_token(body: RefreshRequest) -> LoginResponse:
-    """Exchange a refresh token for a new access token."""
-    token_data = verify_refresh_token(body.refresh_token)
-    if token_data is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token.",
-        )
-
-    user = User.get_by_id(token_data.sub)
-    if user is None or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive.",
-        )
-
-    new_token = create_access_token(
-        user_id=user.id, username=user.username, role=user.role
-    )
-    return LoginResponse(
-        access_token=new_token,
-        token_type="bearer",
-        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        username=user.username,
-        role=user.role,
-    )
+# The refresh-token endpoint has been removed because the application does
+# not issue refresh tokens in the login flow. If refresh-token support is
+# reintroduced, it should include proper refresh-token issuance/rotation
+# and corresponding schema updates.
 
 
 # ---------------------------------------------------------------------------
