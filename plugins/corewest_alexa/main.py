@@ -45,9 +45,13 @@ except ImportError:  # pragma: no cover
 from curriculum.routes import curriculum_router, inspection_router        # noqa: E402
 from curriculum.curriculum_monitor import CurriculumMonitor               # noqa: E402
 from curriculum.inspection_readiness import InspectionReadinessEngine     # noqa: E402
+from curriculum.performance_tracker import PerformanceTracker             # noqa: E402
+from data_aggregator import DataAggregator                                # noqa: E402
 
 _monitor = CurriculumMonitor()
 _readiness = InspectionReadinessEngine()
+_tracker = PerformanceTracker()
+_aggregator = DataAggregator()
 
 # ---------------------------------------------------------------------------
 # Theme router (branded Jinja2 pages)
@@ -88,19 +92,17 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
+# When credentials (cookies/auth headers) are needed, browsers reject
+# allow_origins="*".  We only enable credentials when an explicit origin
+# list is supplied; otherwise credentials are disabled.
 
-_cors_origins_env = os.environ.get("CORS_ORIGINS", "*")
-_allow_origins = [origin.strip() for origin in _cors_origins_env.split(",") if origin.strip()]
-if not _allow_origins:
-    _allow_origins = ["*"]
-
-# When wildcard origins are allowed, CORS with credentials is invalid and rejected by browsers.
-_allow_credentials = "*" not in _allow_origins
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",")]
+_credentials_allowed = "*" not in _cors_origins
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allow_origins,
-    allow_credentials=_allow_credentials,
+    allow_origins=_cors_origins,
+    allow_credentials=_credentials_allowed,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -157,10 +159,14 @@ async def alexa_query(q: str = "", type: str = "today") -> JSONResponse:
     """Voice query endpoint — supports curriculum and inspection query types."""
     query_type = (q or type).strip().lower()
 
-    if query_type in ("curriculum", "subjects", "gaps", "teachers", "at_risk", "today"):
+    if query_type in ("curriculum", "subjects", "gaps", "coverage"):
         speech_text = _monitor.get_voice_summary(query_type)
+    elif query_type in ("teachers", "at_risk", "today"):
+        speech_text = _tracker.get_voice_summary(query_type)
     elif query_type == "inspection":
         speech_text = _readiness.get_voice_summary()
+    elif query_type in ("students", "tasks", "incidents"):
+        speech_text = _aggregator.get_summary(query_type) or f"No data available for {query_type}."
     else:
         speech_text = f"Query type '{query_type}' received."
 
@@ -192,12 +198,24 @@ async def alexa_dashboard(
     return JSONResponse({"status": "success", "data": summary})
 
 
+def _alexa_response(speech_text: str, card_title: str = "Core West") -> dict:
+    """Build an Alexa Skills Kit-compliant response envelope."""
+    return {
+        "version": "1.0",
+        "response": {
+            "outputSpeech": {"type": "PlainText", "text": speech_text},
+            "card": {"type": "Simple", "title": card_title, "content": speech_text},
+            "shouldEndSession": True,
+        },
+    }
+
+
 @app.post("/alexa/webhook", tags=["Alexa"])
 async def alexa_webhook(
     payload: dict,
     _key=Depends(verify_api_key) if (_AUTH_AVAILABLE and verify_api_key) else None,
 ) -> JSONResponse:
-    """Alexa webhook — handles skill intents including curriculum and inspection."""
+    """Alexa webhook — handles skill intents, returns Alexa SKS response envelope."""
     request_type = payload.get("request", {}).get("type", "")
     intent_name = payload.get("request", {}).get("intent", {}).get("name", "")
 
@@ -207,22 +225,22 @@ async def alexa_webhook(
             "inspection readiness, curriculum coverage, subject performance, "
             "curriculum gaps, or student risk summary."
         )
-        return JSONResponse({"speech_text": speech, "received": True})
+        return JSONResponse(_alexa_response(speech, "Welcome to Core West"))
 
     if request_type == "IntentRequest":
         intent_map = {
-            "TodayBriefIntent":          ("today",      _monitor.get_voice_summary),
-            "InspectionIntent":          ("inspection", _readiness.get_voice_summary),
-            "InspectionReadinessIntent": ("inspection", _readiness.get_voice_summary),
-            "CurriculumCoverageIntent":  ("coverage",   _monitor.get_voice_summary),
-            "SubjectPerformanceIntent":  ("subjects",   _monitor.get_voice_summary),
-            "CurriculumGapsIntent":      ("gaps",       _monitor.get_voice_summary),
-            "TeacherSummaryIntent":      ("teachers",   _monitor.get_voice_summary),
-            "StudentRiskIntent":         ("at_risk",    _monitor.get_voice_summary),
+            "TodayBriefIntent":          ("today",      _tracker.get_voice_summary,  "Core West Daily Brief"),
+            "InspectionIntent":          ("inspection", _readiness.get_voice_summary, "Inspection Brief"),
+            "InspectionReadinessIntent": ("inspection", _readiness.get_voice_summary, "Inspection Readiness"),
+            "CurriculumCoverageIntent":  ("coverage",   _monitor.get_voice_summary,   "Curriculum Coverage"),
+            "SubjectPerformanceIntent":  ("subjects",   _monitor.get_voice_summary,   "Subject Performance"),
+            "CurriculumGapsIntent":      ("gaps",       _monitor.get_voice_summary,   "Curriculum Gaps"),
+            "TeacherSummaryIntent":      ("teachers",   _tracker.get_voice_summary,   "Teacher Summary"),
+            "StudentRiskIntent":         ("at_risk",    _tracker.get_voice_summary,   "Student Risk"),
         }
 
         if intent_name in intent_map:
-            query_type, handler = intent_map[intent_name]
+            query_type, handler, card_title = intent_map[intent_name]
             try:
                 try:
                     speech = handler()  # type: ignore[call-arg]
@@ -231,13 +249,11 @@ async def alexa_webhook(
             except (AttributeError, ValueError) as exc:
                 logger.error("Voice handler error for %s: %s", intent_name, exc)
                 speech = f"I was unable to retrieve the {query_type} summary."
-            return JSONResponse({"speech_text": speech, "intent": intent_name, "received": True})
+            return JSONResponse(_alexa_response(speech, card_title))
 
-    return JSONResponse({
-        "speech_text": "Sorry, I did not understand that request.",
-        "received": True,
-        "payload": payload,
-    })
+    return JSONResponse(
+        _alexa_response("Sorry, I did not understand that request.", "Core West")
+    )
 
 
 # ---------------------------------------------------------------------------

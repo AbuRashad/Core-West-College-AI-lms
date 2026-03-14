@@ -3,6 +3,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
+from .blacklist import is_blacklisted
 from .jwt_handler import verify_access_token
 from .models import User
 from .schemas import TokenData
@@ -18,7 +19,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     Extract and validate a JWT bearer token from the ``Authorization``
     header.  Returns the corresponding ``User`` object.
 
-    Raises ``HTTP 401`` on failure.
+    Raises ``HTTP 401`` on failure (missing, invalid, expired, or blacklisted token).
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -28,6 +29,14 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
 
     if not token:
         raise credentials_exception
+
+    # Reject blacklisted (logged-out) tokens before verifying signature
+    if is_blacklisted(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has been revoked.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     token_data: TokenData | None = verify_access_token(token)
     if token_data is None:

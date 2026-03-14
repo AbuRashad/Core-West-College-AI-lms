@@ -175,11 +175,6 @@
   const form = document.getElementById('login-form');
   if (!form) return;
 
-  const isDevEnvironment =
-    location.hostname === 'localhost' ||
-    location.hostname === '127.0.0.1' ||
-    location.protocol === 'file:';
-
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = form.querySelector('#username')?.value.trim();
@@ -213,15 +208,9 @@
         btn.disabled = false;
       }
     } catch {
-      // Fallback: demo login for offline/dev (dev environments only)
-      if (isDevEnvironment && username === 'admin' && password === 'admin') {
-        localStorage.setItem('cwc_jwt', 'demo-token');
-        window.location.href = '/dashboard';
-      } else {
-        if (errEl) errEl.textContent = 'Unable to connect. Please try again.';
-        btn.textContent = 'Sign In';
-        btn.disabled = false;
-      }
+      if (errEl) errEl.textContent = 'Unable to connect. Please try again.';
+      btn.textContent = 'Sign In';
+      btn.disabled = false;
     }
   });
 })();
@@ -268,9 +257,22 @@
     });
   };
 
-  fetch('/api/stats')
-    .then((r) => r.json())
-    .then(applyStats)
+  // Fetch live data from the API, redirecting to /login on 401
+  const token = localStorage.getItem('cwc_jwt');
+  fetch('/alexa/dashboard', {
+    headers: token ? { 'Authorization': 'Bearer ' + token } : {},
+  })
+    .then((r) => {
+      if (r.status === 401) { window.location.href = '/login'; return null; }
+      return r.json();
+    })
+    .then((json) => {
+      if (!json) return;
+      const d = json.data || {};
+      const readiness = d.inspection_readiness?.overall_score ?? mockStats.inspection_readiness;
+      const coverage  = d.curriculum_coverage?.overall_coverage_pct ?? mockStats.curriculum_coverage;
+      applyStats({ ...mockStats, inspection_readiness: readiness, curriculum_coverage: coverage });
+    })
     .catch(() => applyStats(mockStats));
 })();
 

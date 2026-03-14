@@ -211,26 +211,34 @@ Pages that use the full site layout (navbar + footer) extend `base.html`:
 
 ### Authentication
 
-The `/login` page POSTs credentials to `/auth/login`. The backend should return:
+The `/login` page POSTs credentials to `/auth/login`. The backend returns:
 ```json
-{ "token": "your-jwt-token-here" }
+{
+  "access_token": "your-jwt-token-here",
+  "refresh_token": "your-refresh-token-here",
+  "token_type": "bearer",
+  "expires_in": 1800,
+  "username": "admin",
+  "role": "admin"
+}
 ```
-The token is stored in `localStorage` as `cwc_jwt`. Implement token validation in your FastAPI middleware or dependencies.
+The `access_token` is stored in `localStorage` as `cwc_jwt` and sent as
+`Authorization: Bearer <token>` on subsequent API requests.
 
 ### Dashboard API
 
-The dashboard fetches `/api/stats` and expects:
+The dashboard fetches live data from `/alexa/dashboard` (JWT required):
 ```json
 {
-  "inspection_readiness": 78,
-  "curriculum_coverage": 85,
-  "teachers": 52,
-  "students": 487,
-  "open_tasks": 14,
-  "incidents": 3
+  "status": "success",
+  "data": {
+    "inspection_readiness": { "overall_score": 78, "overall_grade": "Good" },
+    "curriculum_coverage": { "overall_coverage_pct": 85, ... }
+  }
 }
 ```
-If the endpoint is unavailable, mock data is used automatically.
+If the endpoint returns `401 Unauthorized`, the page redirects to `/login`.
+Mock data is used automatically when the API is unreachable.
 
 ### Static Files
 

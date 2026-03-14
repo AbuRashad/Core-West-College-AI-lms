@@ -12,6 +12,7 @@ from pathlib import Path
 # Set test environment variables before importing the app
 os.environ["ALEXA_API_KEY"] = "test-api-key-for-tests"
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret-for-tests")
+os.environ["ADMIN_SEED_PASSWORD"] = "TestAdmin2024!"
 
 # Ensure the plugin root is on the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -43,7 +44,7 @@ def _get_admin_token() -> str:
     """Log in as admin and return a JWT access token."""
     resp = client.post(
         "/auth/login",
-        json={"username": "admin", "password": "CoreWest2024!"},
+        json={"username": "admin", "password": "TestAdmin2024!"},
     )
     assert resp.status_code == 200, f"Login failed: {resp.text}"
     return resp.json()["access_token"]
@@ -161,8 +162,10 @@ def test_webhook_launch_request():
     resp = client.post("/alexa/webhook", json=payload, headers=WEBHOOK_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
-    assert "Welcome to Core West" in body["speech_text"]
-    assert body["received"] is True
+    # Alexa SKS envelope format
+    assert body["version"] == "1.0"
+    assert "Welcome to Core West" in body["response"]["outputSpeech"]["text"]
+    assert body["response"]["shouldEndSession"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +195,10 @@ def test_webhook_curriculum_intents(intent_name):
     resp = client.post("/alexa/webhook", json=payload, headers=WEBHOOK_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["received"] is True
-    assert body["speech_text"]
-    assert body["intent"] == intent_name
+    # Alexa SKS envelope format
+    assert body["version"] == "1.0"
+    assert body["response"]["outputSpeech"]["text"]
+    assert body["response"]["card"]["title"]
 
 
 def test_webhook_unknown_intent():
@@ -207,4 +211,4 @@ def test_webhook_unknown_intent():
     resp = client.post("/alexa/webhook", json=payload, headers=WEBHOOK_HEADERS)
     assert resp.status_code == 200
     body = resp.json()
-    assert "did not understand" in body["speech_text"].lower()
+    assert "did not understand" in body["response"]["outputSpeech"]["text"].lower()

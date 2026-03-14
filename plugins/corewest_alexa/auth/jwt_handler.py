@@ -1,5 +1,6 @@
 """JWT access-token and refresh-token creation / verification."""
 
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -8,11 +9,14 @@ from jose import JWTError, jwt
 
 from .schemas import TokenData
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Configuration (overridable via environment variables)
 # ---------------------------------------------------------------------------
 
-SECRET_KEY: str = os.environ.get("JWT_SECRET_KEY", "change-me-in-production")
+_DEFAULT_SECRET = "change-me-in-production"
+SECRET_KEY: str = os.environ.get("JWT_SECRET_KEY", _DEFAULT_SECRET)
 ALGORITHM: str = os.environ.get("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
     os.environ.get("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30")
@@ -20,6 +24,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
 REFRESH_TOKEN_EXPIRE_DAYS: int = int(
     os.environ.get("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7")
 )
+
+if SECRET_KEY == _DEFAULT_SECRET:
+    logger.warning(
+        "JWT_SECRET_KEY is using the insecure default value. "
+        "Set the JWT_SECRET_KEY environment variable before deploying to production."
+    )
 
 
 def _utcnow() -> datetime:

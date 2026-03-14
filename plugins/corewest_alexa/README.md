@@ -96,12 +96,13 @@ Open **http://localhost:8080** to see the Core West College branded homepage.
 
 | Variable | Default | Description |
 |---|---|---|
-| `JWT_SECRET_KEY` | `change-me-in-production` | Secret key for JWT signing (RS256 / HS256) |
+| `JWT_SECRET_KEY` | *(required — startup warning if unset)* | Secret key for JWT signing |
 | `JWT_ALGORITHM` | `HS256` | JWT algorithm |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Access token lifetime |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token lifetime |
-| `ALEXA_API_KEY` | `""` | API key for Alexa webhook (`X-API-Key` header) |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | Access token lifetime (minutes) |
+| `JWT_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token lifetime (days) |
+| `ADMIN_SEED_PASSWORD` | *(required to seed admin user)* | Admin password set on first run |
+| `ALEXA_API_KEY` | `""` | API key for Alexa webhook (`X-API-Key` header) — 401 if unset |
+| `CORS_ORIGINS` | `*` | Comma-separated allowed CORS origins (`allow_credentials` disabled with `*`) |
 | `RATE_LIMIT_MAX_ATTEMPTS` | `5` | Max login attempts per window |
 | `RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window in seconds |
 

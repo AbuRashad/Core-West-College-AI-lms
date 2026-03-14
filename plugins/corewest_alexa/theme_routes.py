@@ -3,6 +3,8 @@ Core West College Theme Routes
 FastAPI router serving all branded HTML template pages.
 """
 from pathlib import Path
+from typing import Any
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -11,6 +13,25 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Auth dependency — imported lazily so the theme module can be used without
+# the auth package (graceful degradation).
+# ---------------------------------------------------------------------------
+
+try:
+    from auth.dependencies import require_authenticated as _require_authenticated  # type: ignore[import-not-found]
+    _AUTH_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _AUTH_AVAILABLE = False
+    _require_authenticated = None  # type: ignore[assignment]
+
+
+def _auth_dep() -> list[Any]:
+    """Return the auth dependency list when auth is configured."""
+    if _AUTH_AVAILABLE:
+        return [Depends(_require_authenticated)]
+    return []
 
 
 def render(request: Request, template: str, **context):
@@ -81,20 +102,35 @@ async def login(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Protected pages (require JWT when auth is available)
+# Protected pages — require a valid JWT when auth is configured
 # ---------------------------------------------------------------------------
 
 
-@router.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
+@router.get(
+    "/dashboard",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+    dependencies=_auth_dep(),
+)
 async def dashboard(request: Request):
     return render(request, "dashboard.html", page_title="AI Command Center")
 
 
-@router.get("/inspection-dashboard", response_class=HTMLResponse, include_in_schema=False)
+@router.get(
+    "/inspection-dashboard",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+    dependencies=_auth_dep(),
+)
 async def inspection_dashboard(request: Request):
     return render(request, "inspection_dashboard.html", page_title="Inspection Dashboard")
 
 
-@router.get("/curriculum-dashboard", response_class=HTMLResponse, include_in_schema=False)
+@router.get(
+    "/curriculum-dashboard",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+    dependencies=_auth_dep(),
+)
 async def curriculum_dashboard(request: Request):
     return render(request, "curriculum_dashboard.html", page_title="Curriculum Dashboard")

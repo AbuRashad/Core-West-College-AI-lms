@@ -2,9 +2,11 @@
 
 import json
 import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 from .utils import hash_password, verify_password
@@ -12,9 +14,18 @@ from .utils import hash_password, verify_password
 # Path to the JSON user store (relative to this file)
 _USERS_FILE = Path(__file__).parent / "users.json"
 
+# Process-level lock to prevent concurrent write corruption
+_store_lock = Lock()
+
 
 def _load_users() -> list[dict]:
     """Load users from the JSON store."""
+    with _store_lock:
+        return _load_users_unsafe()
+
+
+def _load_users_unsafe() -> list[dict]:
+    """Load users without acquiring the lock (caller must hold it)."""
     if not _USERS_FILE.exists():
         return []
     with _USERS_FILE.open("r", encoding="utf-8") as f:
@@ -22,9 +33,27 @@ def _load_users() -> list[dict]:
 
 
 def _save_users(users: list[dict]) -> None:
-    """Persist users to the JSON store."""
-    with _USERS_FILE.open("w", encoding="utf-8") as f:
-        json.dump(users, f, indent=2, default=str)
+    """Persist users to the JSON store atomically via temp-file + rename."""
+    with _store_lock:
+        _save_users_unsafe(users)
+
+
+def _save_users_unsafe(users: list[dict]) -> None:
+    """Save users without acquiring the lock (caller must hold it)."""
+    _USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=_USERS_FILE.parent, prefix=".users_tmp_", suffix=".json"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(users, f, indent=2, default=str)
+        Path(tmp_path).replace(_USERS_FILE)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 class User:
@@ -125,21 +154,23 @@ class User:
         return None
 
     def save(self) -> None:
-        """Insert or update this user in the JSON store."""
-        users = _load_users()
-        for i, d in enumerate(users):
-            if d["id"] == self.id:
-                users[i] = self.to_dict()
-                _save_users(users)
-                return
-        # New user
-        users.append(self.to_dict())
-        _save_users(users)
+        """Insert or update this user in the JSON store (atomic read-modify-write)."""
+        with _store_lock:
+            users = _load_users_unsafe()
+            for i, d in enumerate(users):
+                if d["id"] == self.id:
+                    users[i] = self.to_dict()
+                    _save_users_unsafe(users)
+                    return
+            # New user
+            users.append(self.to_dict())
+            _save_users_unsafe(users)
 
     def delete(self) -> None:
-        """Remove this user from the JSON store."""
-        users = [d for d in _load_users() if d["id"] != self.id]
-        _save_users(users)
+        """Remove this user from the JSON store (atomic read-modify-write)."""
+        with _store_lock:
+            users = [d for d in _load_users_unsafe() if d["id"] != self.id]
+            _save_users_unsafe(users)
 
     def touch_last_login(self) -> None:
         """Update last_login timestamp and persist."""

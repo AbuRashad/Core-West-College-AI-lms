@@ -8,6 +8,7 @@ from .dependencies import require_authenticated
 from .jwt_handler import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     create_access_token,
+    create_refresh_token,
     verify_access_token,
     verify_refresh_token,
 )
@@ -122,11 +123,15 @@ async def login(
     reset_attempts(request)
     user.touch_last_login()
 
-    token = create_access_token(
+    access_token = create_access_token(
+        user_id=user.id, username=user.username, role=user.role
+    )
+    refresh_token = create_refresh_token(
         user_id=user.id, username=user.username, role=user.role
     )
     return LoginResponse(
-        access_token=token,
+        access_token=access_token,
+        refresh_token=refresh_token,
         token_type="bearer",
         expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         username=user.username,
@@ -192,12 +197,42 @@ async def register(
 
 # ---------------------------------------------------------------------------
 # POST /auth/refresh
-# (Deprecated) POST /auth/refresh
 # ---------------------------------------------------------------------------
-# The refresh-token endpoint has been removed because the application does
-# not issue refresh tokens in the login flow. If refresh-token support is
-# reintroduced, it should include proper refresh-token issuance/rotation
-# and corresponding schema updates.
+
+
+@router.post("/refresh", response_model=LoginResponse)
+async def refresh_token(body: RefreshRequest) -> LoginResponse:
+    """Exchange a refresh token for a new access token."""
+    token_data = verify_refresh_token(body.refresh_token)
+    if token_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token.",
+        )
+
+    user = User.get_by_id(token_data.sub)
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive.",
+        )
+
+    new_access_token = create_access_token(
+        user_id=user.id, username=user.username, role=user.role
+    )
+    new_refresh_token = create_refresh_token(
+        user_id=user.id, username=user.username, role=user.role
+    )
+    # Blacklist the old refresh token to prevent replay
+    blacklist_token(body.refresh_token)
+    return LoginResponse(
+        access_token=new_access_token,
+        refresh_token=new_refresh_token,
+        token_type="bearer",
+        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        username=user.username,
+        role=user.role,
+    )
 
 
 # ---------------------------------------------------------------------------
