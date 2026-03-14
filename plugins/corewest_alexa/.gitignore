@@ -16,4 +16,7 @@ env/
 htmlcov/
 
 # User data (generated at runtime)
+.env
+.env.*
+!.env.example
 auth/users.json
