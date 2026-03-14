@@ -175,6 +175,11 @@
   const form = document.getElementById('login-form');
   if (!form) return;
 
+  const isDevEnvironment =
+    location.hostname === 'localhost' ||
+    location.hostname === '127.0.0.1' ||
+    location.protocol === 'file:';
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const username = form.querySelector('#username')?.value.trim();
@@ -208,8 +213,8 @@
         btn.disabled = false;
       }
     } catch {
-      // Fallback: demo login for offline/dev
-      if (username === 'admin' && password === 'admin') {
+      // Fallback: demo login for offline/dev (dev environments only)
+      if (isDevEnvironment && username === 'admin' && password === 'admin') {
         localStorage.setItem('cwc_jwt', 'demo-token');
         window.location.href = '/dashboard';
       } else {
