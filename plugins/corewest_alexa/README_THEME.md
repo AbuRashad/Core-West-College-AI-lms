@@ -188,8 +188,8 @@ Pages that use the full site layout (navbar + footer) extend `base.html`:
 | Counter animation | `IntersectionObserver` + `requestAnimationFrame` easing |
 | Active nav links | Compares `window.location.pathname` to `href` attributes |
 | Contact form validation | Required fields + email regex, inline error messages |
-| Login form | POSTs to `/auth/login`, stores JWT in `localStorage`, falls back to demo mode |
-| Dashboard data | Fetches `/api/stats`, falls back to mock data on error |
+| Login form | POSTs to `/auth/login`, stores JWT in `localStorage` as `cwc_jwt` |
+| Dashboard data | Fetches `/alexa/dashboard` with `Authorization: Bearer <token>`, redirects to `/login` on 401, falls back to mock data on network error |
 | Newsletter | Submission confirmation with auto-reset |
 | Tab component | `.tabs` + `.tab-btn[data-tab]` + `.tab-panel[data-panel]` |
 
