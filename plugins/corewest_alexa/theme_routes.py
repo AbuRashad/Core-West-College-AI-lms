@@ -102,7 +102,7 @@ async def login(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Protected pages — require a valid JWT when auth is configured
+# Dashboard pages — client-side auth check (JS redirects to /login if no JWT)
 # ---------------------------------------------------------------------------
 
 

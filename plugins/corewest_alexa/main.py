@@ -159,16 +159,19 @@ async def alexa_query(q: str = "", type: str = "today") -> JSONResponse:
     """Voice query endpoint — supports curriculum and inspection query types."""
     query_type = (q or type).strip().lower()
 
-    if query_type in ("curriculum", "subjects", "gaps", "coverage"):
+    if query_type in ("curriculum", "subjects", "gaps", "today"):
         speech_text = _monitor.get_voice_summary(query_type)
-    elif query_type in ("teachers", "at_risk", "today"):
+    elif query_type in ("teachers", "at_risk"):
+        speech_text = _tracker.get_voice_summary(query_type)
+    elif query_type in ("students", "tasks", "incidents"):
         speech_text = _tracker.get_voice_summary(query_type)
     elif query_type == "inspection":
         speech_text = _readiness.get_voice_summary()
-    elif query_type in ("students", "tasks", "incidents"):
-        speech_text = _aggregator.get_summary(query_type) or f"No data available for {query_type}."
     else:
-        speech_text = f"Query type '{query_type}' received."
+        speech_text = (
+            f"Sorry, I don't recognize the query type '{query_type}'. "
+            f"Supported types are: {', '.join(SUPPORTED_TYPES)}."
+        )
 
     return JSONResponse({
         "speech_text": speech_text,
